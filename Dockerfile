@@ -6,9 +6,6 @@ LABEL stage=builder
 # Set Maven options for build
 ENV MAVEN_OPTS="-Xms512m -Xmx2048m"
 
-# Speed up Maven build
-COPY settings.xml /root/.m2/settings.xml
-
 # Clone Sakai repository with minimal depth
 WORKDIR /tmp
 ARG SAKAI_VERSION=23.3
@@ -20,7 +17,7 @@ WORKDIR /tmp/sakai
 RUN mvn clean install -DskipTests -Djava.net.preferIPv4Stack=true -T 2C
 
 # Stage 2: Runtime environment
-FROM tomcat:10-jdk11-temurin-slim
+FROM tomcat:10.1-jdk11-temurin
 
 LABEL maintainer="Sarafrika <info@sarafrika.com>"
 

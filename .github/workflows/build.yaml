@@ -11,7 +11,7 @@ on:
       sakai_version:
         description: 'Sakai version to build'
         required: true
-        default: '23.0'
+        default: '23.3'
         type: string
       publish_image:
         description: 'Publish image to DockerHub'

@@ -108,8 +108,8 @@ jobs:
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
-          context: ./sakai
-          file: ./sakai/Dockerfile
+          context: .
+          file: ./Dockerfile
           push: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.publish_image == 'true') }}
           platforms: ${{ env.PLATFORMS }}
           tags: ${{ steps.meta.outputs.tags }}
@@ -125,7 +125,7 @@ jobs:
         with:
           name: sakai-docker-image-${{ env.SAKAI_VERSION }}
           path: |
-            ./sakai
+            ./Dockerfile
             ./.env.redacted
           retention-days: 7
 

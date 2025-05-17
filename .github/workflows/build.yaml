@@ -1,0 +1,145 @@
+name: Build and Publish Sakai Docker Image
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      sakai_version:
+        description: 'Sakai version to build'
+        required: true
+        default: '23.0'
+        type: string
+      publish_image:
+        description: 'Publish image to DockerHub'
+        required: true
+        default: false
+        type: boolean
+
+env:
+  REGISTRY: docker.io
+  IMAGE_NAME: ${{ github.repository_owner }}/sakai-lms
+  PLATFORMS: linux/amd64,linux/arm64
+  # Default values for database configuration
+  MARIADB_ROOT_PASSWORD: ${{ secrets.MARIADB_ROOT_PASSWORD || 'rootpassword' }}
+  MARIADB_PASSWORD: ${{ secrets.MARIADB_PASSWORD || 'sakaipassword' }}
+  DATABASE_USER: ${{ secrets.DATABASE_USER || 'sakai' }}
+  DATABASE_NAME: ${{ secrets.DATABASE_NAME || 'sakai' }}
+
+jobs:
+  build-and-push:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set Sakai version
+        id: set-version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "SAKAI_VERSION=${{ github.event.inputs.sakai_version }}" >> $GITHUB_ENV
+          elif [[ "${{ github.ref_type }}" == "tag" && "${{ github.ref }}" =~ ^refs/tags/v[0-9]+\.[0-9]+$ ]]; then
+            # Extract version from tag (e.g., v23.0 -> 23.0)
+            VERSION="${{ github.ref_name }}"
+            VERSION="${VERSION#v}"
+            echo "SAKAI_VERSION=${VERSION}" >> $GITHUB_ENV
+          else
+            echo "SAKAI_VERSION=23.0" >> $GITHUB_ENV
+          fi
+          echo "Using Sakai version: ${{ env.SAKAI_VERSION }}"
+
+      - name: Generate .env file
+        run: |
+          cat > .env << EOF
+          SAKAI_VERSION=${{ env.SAKAI_VERSION }}
+          MARIADB_ROOT_PASSWORD=${{ env.MARIADB_ROOT_PASSWORD }}
+          MARIADB_PASSWORD=${{ env.MARIADB_PASSWORD }}
+          DATABASE_USER=${{ env.DATABASE_USER }}
+          DATABASE_NAME=${{ env.DATABASE_NAME }}
+          EOF
+          
+          # Create a redacted version for logs (don't show actual passwords)
+          cat > .env.redacted << EOF
+          SAKAI_VERSION=${{ env.SAKAI_VERSION }}
+          MARIADB_ROOT_PASSWORD=******
+          MARIADB_PASSWORD=******
+          DATABASE_USER=${{ env.DATABASE_USER }}
+          DATABASE_NAME=${{ env.DATABASE_NAME }}
+          EOF
+          
+          echo "Generated .env file with the following variables (redacted):"
+          cat .env.redacted
+
+      - name: Extract metadata for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+            type=raw,value=${{ env.SAKAI_VERSION }},enable=true
+
+      - name: Login to DockerHub
+        if: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.publish_image == 'true') }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./sakai
+          file: ./sakai/Dockerfile
+          push: ${{ github.event_name != 'pull_request' && (github.event_name != 'workflow_dispatch' || github.event.inputs.publish_image == 'true') }}
+          platforms: ${{ env.PLATFORMS }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            SAKAI_VERSION=${{ env.SAKAI_VERSION }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Upload artifact (for PR)
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: sakai-docker-image-${{ env.SAKAI_VERSION }}
+          path: |
+            ./sakai
+            ./.env.redacted
+          retention-days: 7
+
+      - name: Post build summary
+        run: |
+          echo "## Sakai Docker Image Build" >> $GITHUB_STEP_SUMMARY
+          echo "- **Sakai Version:** ${{ env.SAKAI_VERSION }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image Name:** ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Database User:** ${{ env.DATABASE_USER }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Database Name:** ${{ env.DATABASE_NAME }}" >> $GITHUB_STEP_SUMMARY
+          
+          if [[ "${{ github.event_name }}" != "pull_request" && ("${{ github.event_name }}" != "workflow_dispatch" || "${{ github.event.inputs.publish_image }}" == "true") ]]; then
+            echo "- **Published:** Yes" >> $GITHUB_STEP_SUMMARY
+            echo "- **Tags:** ${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- **Published:** No (dry run or PR)" >> $GITHUB_STEP_SUMMARY
+          fi

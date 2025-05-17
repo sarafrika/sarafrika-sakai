@@ -1,0 +1,56 @@
+services:
+  mariadb:
+    image: mariadb:10.6
+    container_name: sakai-mariadb
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - ./mariadb/init.sql:/docker-entrypoint-initdb.d/init.sql
+    environment:
+      MARIADB_ROOT_PASSWORD: rootpassword
+      MARIADB_DATABASE: sakai
+      MARIADB_USER: sakai
+      MARIADB_PASSWORD: sakaipassword
+    ports:
+      - "3306:3306"
+    networks:
+      - sakai-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "sakai", "-p$MARIADB_PASSWORD"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    restart: always
+
+  sakai:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        SAKAI_VERSION: ${SAKAI_VERSION:-23.0}
+    container_name: sakai-app
+    depends_on:
+      - mariadb
+    ports:
+      - "8080:8080"
+    volumes:
+      - sakai_data:/usr/local/sakai
+      - tomcat_logs:/usr/local/tomcat/logs
+    environment:
+      JAVA_OPTS: "-server -Xms1G -Xmx4G -XX:+UseG1GC -XX:+UseCompressedOops -XX:+UseConcMarkSweepGC -XX:+DisableExplicitGC"
+      CATALINA_OPTS: "-Dsakai.home=/usr/local/sakai"
+      DATABASE_HOST: "mariadb"
+      DATABASE_NAME: "sakai"
+      DATABASE_USER: "sakai"
+      DATABASE_PASSWORD: "sakaipassword"
+    networks:
+      - sakai-network
+    restart: always
+
+networks:
+  sakai-network:
+    driver: bridge
+
+volumes:
+  mariadb_data:
+  sakai_data:
+  tomcat_logs:

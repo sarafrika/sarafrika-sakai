@@ -4,19 +4,23 @@ FROM maven:3.9-eclipse-temurin-11 AS builder
 LABEL stage=builder
 
 # Set Maven options for build
-ENV MAVEN_OPTS="-Xms512m -Xmx1024m"
+ENV MAVEN_OPTS="-Xms512m -Xmx2048m"
 
-# Clone and build Sakai
+# Speed up Maven build
+COPY settings.xml /root/.m2/settings.xml
+
+# Clone Sakai repository with minimal depth
 WORKDIR /tmp
 ARG SAKAI_VERSION=23.3
-RUN git clone -b ${SAKAI_VERSION} --depth 1 https://github.com/sakaiproject/sakai.git
+RUN git clone -b ${SAKAI_VERSION} --depth 1 --single-branch https://github.com/sakaiproject/sakai.git
 
-WORKDIR /tmp/sakai
 # Build Sakai with Maven
-RUN mvn clean install -Dmaven.test.skip=true -Djava.net.preferIPv4Stack=true
+WORKDIR /tmp/sakai
+# Use parallel builds and offline mode if dependencies cached
+RUN mvn clean install -DskipTests -Djava.net.preferIPv4Stack=true -T 2C
 
 # Stage 2: Runtime environment
-FROM tomcat:10-jdk11-temurin
+FROM tomcat:10-jdk11-temurin-slim
 
 LABEL maintainer="Sarafrika <info@sarafrika.com>"
 
@@ -24,20 +28,16 @@ LABEL maintainer="Sarafrika <info@sarafrika.com>"
 ENV JAVA_OPTS="-server -Xms1G -Xmx4G -XX:+UseG1GC -XX:+UseCompressedOops -XX:+DisableExplicitGC"
 ENV CATALINA_OPTS="-Dsakai.home=/usr/local/sakai"
 
-# Install required packages
+# Install only the required packages
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    gettext \
-    && rm -rf /var/lib/apt/lists/*
+    apt-get install -y --no-install-recommends gettext curl && \
+    rm -rf /var/lib/apt/lists/*
 
 # Create Sakai directories
 RUN mkdir -p /usr/local/sakai/properties /usr/local/sakai/templates
 
-# Copy built webapps from builder stage
-COPY --from=builder /tmp/sakai/webapps/ $CATALINA_HOME/webapps/
-
-# If webapps are in 'target' directories instead, this would handle that case
-RUN mkdir -p $CATALINA_HOME/webapps/
+# Copy built webapps from builder stage - optimize to copy only what's needed
+COPY --from=builder /tmp/sakai/webapps/ $CATALINA_HOME/webapps/ 2>/dev/null || true
 COPY --from=builder /tmp/sakai/*/target/*.war $CATALINA_HOME/webapps/ 2>/dev/null || true
 
 # Download MariaDB JDBC connector
@@ -56,13 +56,10 @@ RUN chmod -R 755 $CATALINA_HOME/webapps/ && \
 # Expose Tomcat port
 EXPOSE 8080
 
-# Create startup script to process templates with environment variables
+# Create startup script for template processing
 RUN echo '#!/bin/bash\n\
-# Process properties templates with environment variables\n\
 envsubst < /usr/local/sakai/templates/sakai.properties.template > /usr/local/sakai/properties/sakai.properties\n\
 envsubst < /usr/local/sakai/templates/local.properties.template > /usr/local/sakai/properties/local.properties\n\
-\n\
-# Start Tomcat\n\
 exec catalina.sh run\n\
 ' > /usr/local/bin/startup.sh && chmod +x /usr/local/bin/startup.sh
 

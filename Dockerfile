@@ -33,9 +33,18 @@ RUN apt-get update && \
 # Create Sakai directories
 RUN mkdir -p /usr/local/sakai/properties /usr/local/sakai/templates
 
-# Copy built webapps from builder stage - optimize to copy only what's needed
-COPY --from=builder /tmp/sakai/webapps/ $CATALINA_HOME/webapps/ 2>/dev/null || true
-COPY --from=builder /tmp/sakai/*/target/*.war $CATALINA_HOME/webapps/ 2>/dev/null || true
+# Copy built webapps from builder stage using a shell script approach
+WORKDIR /tmp
+RUN mkdir -p /usr/local/tomcat/webapps/
+# Use a script to handle copying the files that might not exist
+COPY --from=builder /tmp/sakai/ /tmp/sakai/
+RUN if [ -d "/tmp/sakai/webapps" ]; then \
+      cp -r /tmp/sakai/webapps/* /usr/local/tomcat/webapps/ 2>/dev/null || echo "No files in webapps directory"; \
+    fi
+# Find and copy all WAR files
+RUN find /tmp/sakai -name "*.war" -exec cp {} /usr/local/tomcat/webapps/ \; 2>/dev/null || echo "No WAR files found"
+# Clean up the temporary files
+RUN rm -rf /tmp/sakai
 
 # Download MariaDB JDBC connector
 ADD https://repo1.maven.org/maven2/org/mariadb/jdbc/mariadb-java-client/3.3.2/mariadb-java-client-3.3.2.jar $CATALINA_HOME/lib/
